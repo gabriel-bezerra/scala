@@ -250,6 +250,7 @@ private[internal] trait TypeConstraints {
             else glb(tvar.constr.hiBounds, depth)
           }
           else {
+            println(s"(tvar.constr.loBounds = ${tvar.constr.loBounds} ==> ${tvar.constr.loBounds.map(_.bounds)})")
             if (depth.isAnyDepth) lub(tvar.constr.loBounds)
             else lub(tvar.constr.loBounds, depth)
           }

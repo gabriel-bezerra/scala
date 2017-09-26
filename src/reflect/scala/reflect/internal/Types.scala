@@ -2811,14 +2811,21 @@ trait Types
     def withTypeVars(op: Type => Boolean): Boolean = withTypeVars(op, AnyDepth)
 
     def withTypeVars(op: Type => Boolean, depth: Depth): Boolean = {
+      println(s"withTypeVars(op: Type => Boolean, depth = $depth) {")
       val quantifiedFresh = cloneSymbols(quantified)
+      println(s"quantifiedFresh = $quantifiedFresh")
       val tvars = quantifiedFresh map (tparam => TypeVar(tparam))
+      println(s"tvars = $tvars")
       val underlying1 = underlying.instantiateTypeParams(quantified, tvars) // fuse subst quantified -> quantifiedFresh -> tvars
+      println(s"underlying1 = $underlying1")
+      val r =
       op(underlying1) && {
         println(s"going to solve for ${this.safeToString}")
         solve(tvars, quantifiedFresh, quantifiedFresh map (_ => Invariant), upper = false, depth) &&
         isWithinBounds(NoPrefix, NoSymbol, quantifiedFresh, tvars map (_.inst))
       }
+      println(s"} withTypeVars(op: Type => Boolean, depth = $depth) done: $r")
+      r
     }
   }
 
