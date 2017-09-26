@@ -248,6 +248,7 @@ trait TypeComparers {
   }
 
   def isSubType(tp1: Type, tp2: Type, depth: Depth = Depth.AnyDepth): Boolean = try {
+    println(s"isSubType tp1 = $tp1 - tp2 = $tp2 - depth = $depth")
     subsametypeRecursions += 1
 
     //OPT cutdown on Function0 allocation
@@ -401,7 +402,7 @@ trait TypeComparers {
      *   - bind TypeVars  on the right, if lhs is not Annotated nor BoundedWildcard
      *   - handle common cases for first-kind TypeRefs on both sides as a fast path.
      */
-    def firstTry = tp2 match {
+    def firstTry = { println("firstTry"); tp2 match {
       // fast path: two typerefs, none of them HK
       case tr2: TypeRef =>
         tp1 match {
@@ -413,21 +414,34 @@ trait TypeComparers {
             val sym2 = tr2.sym
             val pre1 = tr1.pre
             val pre2 = tr2.pre
-            (((if (sym1 eq sym2) phase.erasedTypes || sym1.owner.hasPackageFlag || isSubType(pre1, pre2, depth)
-            else (sym1.name == sym2.name && !sym1.isModuleClass && !sym2.isModuleClass &&
-              (isUnifiable(pre1, pre2) ||
-                isSameSpecializedSkolem(sym1, sym2, pre1, pre2) ||
-                sym2.isAbstractType && isSubPre(pre1, pre2, sym2)))) &&
-              isSubArgs(tr1.args, tr2.args, sym1.typeParams, depth))
-              ||
-              sym2.isClass && {
-                val base = tr1 baseType sym2
-                // During bootstrap, `base eq NoType` occurs about 2.5 times as often as `base ne NoType`.
-                // The extra check seems like a worthwhile optimization (about 2.5M useless calls to isSubType saved during that run).
-                (base ne tr1) && (base ne NoType) && isSubType(base, tr2, depth)
-              }
-              ||
-              thirdTryRef(tr1, tr2))
+            println(s"t1 and t2 are TypeRef: sym1 = $sym1 - sym2 = $sym2 - pre1 = $pre1 - pre2 = $pre2")
+            (
+              (
+                (
+                  if (sym1 eq sym2)
+                    phase.erasedTypes || sym1.owner.hasPackageFlag || {println("check ref prefix"); val r = isSubType(pre1, pre2, depth); println(s"done = $r"); r }
+                  else
+                    (sym1.name == sym2.name && !sym1.isModuleClass && !sym2.isModuleClass &&
+                      (isUnifiable(pre1, pre2) ||
+                        isSameSpecializedSkolem(sym1, sym2, pre1, pre2) ||
+                        sym2.isAbstractType && isSubPre(pre1, pre2, sym2)))
+                ) &&
+                  {
+                    println(s"isSubArgs(tr1.args = ${tr1.args}, tr2.args = ${tr2.args}, sym1.typeParams = ${sym1.typeParams}, depth = $depth)")
+                    val r=
+                    isSubArgs(tr1.args, tr2.args, sym1.typeParams, depth)
+                    println(s"isSubArgs result = $r")
+                    r
+                  }
+              ) ||
+                sym2.isClass && {
+                  val base = tr1 baseType sym2
+                  // During bootstrap, `base eq NoType` occurs about 2.5 times as often as `base ne NoType`.
+                  // The extra check seems like a worthwhile optimization (about 2.5M useless calls to isSubType saved during that run).
+                  (base ne tr1) && (base ne NoType) && isSubType(base, tr2, depth)
+                } ||
+                  thirdTryRef(tr1, tr2)
+            )
           case _ =>
             secondTry
         }
@@ -437,41 +451,53 @@ trait TypeComparers {
       case BoundedWildcardType(bounds) =>
         isSubType(tp1, bounds.hi, depth)
       case tv2 @ TypeVar(_, constr2) =>
+        println(s"tv2 type var $tv2")
         tp1 match {
           case AnnotatedType(_, _) | BoundedWildcardType(_) =>
+            println(s"tp1 annotated or bounded $tp1")
             secondTry
           case _ =>
+            println(s"tp1 is not annotated or bounded $tp1")
             tv2.registerBound(tp1, isLowerBound = true)
         }
       case _ =>
         secondTry
-    }
+    }}
 
     /* Second try, on the left:
      *   - unwrap AnnotatedTypes, BoundedWildcardTypes,
      *   - bind typevars,
      *   - handle existential types by skolemization.
      */
-    def secondTry = tp1 match {
+    def secondTry = { println("secondTry"); tp1 match {
       case AnnotatedType(_, _) =>
         isSubType(tp1.withoutAnnotations, tp2.withoutAnnotations, depth) &&
           annotationsConform(tp1, tp2)
       case BoundedWildcardType(bounds) =>
         isSubType(tp1.bounds.lo, tp2, depth)
       case tv @ TypeVar(_,_) =>
+        println(s"tp1 type var ${tv.safeToString}")
         tv.registerBound(tp2, isLowerBound = false)
       case ExistentialType(_, _) =>
+        println(s"tp1 existential ${tp1.safeToString}")
+        (tp2 match {
+          case et2: ExistentialType => println(s"tp2 is also existential: ${et2.underlying.safeToString}")
+            //isSameType(tp1, tp2)
+            false
+          case _ => false
+        }) || (
         try {
           skolemizationLevel += 1
           isSubType(tp1.skolemizeExistential, tp2, depth)
         } finally {
           skolemizationLevel -= 1
-        }
+        })
       case _ =>
         thirdTry
-    }
+    }}
 
     def thirdTryRef(tp1: Type, tp2: TypeRef): Boolean = {
+      println("thirdTryRef")
       val sym2 = tp2.sym
       def retry(lhs: Type, rhs: Type)   = isSubType(lhs, rhs, depth)
       def abstractTypeOnRight(lo: Type) = isDifferentTypeConstructor(tp2, lo) && retry(tp1, lo)
@@ -494,14 +520,20 @@ trait TypeComparers {
      *   - handle typerefs and existentials.
      *   - handle left+right method types, polytypes, typebounds
      */
-    def thirdTry = tp2 match {
+    def thirdTry = { println("thirdTry"); tp2 match {
       case tr2: TypeRef =>
         thirdTryRef(tp1, tr2)
       case rt2: RefinedType =>
         (rt2.parents forall (isSubType(tp1, _, depth))) &&
           (rt2.decls forall (specializesSym(tp1, _, depth)))
       case et2: ExistentialType =>
-        et2.withTypeVars(isSubType(tp1, _, depth), depth) || fourthTry
+        println(s"tp2 existential 3rd $et2 - underlying = ${et2.underlying}")
+
+        {
+          val r = et2.withTypeVars(isSubType(tp1, _, depth), depth)
+          println(s"made up to here r = $r")
+          r
+        } || fourthTry
       case mt2: MethodType =>
         tp1 match {
           case mt1 @ MethodType(params1, res1) =>
@@ -532,12 +564,13 @@ trait TypeComparers {
         }
       case _ =>
         fourthTry
-    }
+    }}
 
     /* Fourth try, on the left:
      *   - handle typerefs, refined types, and singleton types.
      */
     def fourthTry = {
+      println("fourthTry")
       def retry(lhs: Type, rhs: Type)  = ((tp1 ne lhs) || (tp2 ne rhs)) && isSubType(lhs, rhs, depth)
       def abstractTypeOnLeft(hi: Type) = isDifferentTypeConstructor(tp1, hi) && retry(hi, tp2)
 
@@ -568,7 +601,8 @@ trait TypeComparers {
   }
 
 
-  def isWeakSubType(tp1: Type, tp2: Type) =
+  def isWeakSubType(tp1: Type, tp2: Type) = {
+    println(s"isWeakSubType tp1 = $tp1 - tp2 = $tp2")
     tp1.dealiasWiden match {
       case TypeRef(_, sym1, _) if isNumericValueClass(sym1) =>
         tp2.deconst.dealias match {
@@ -580,6 +614,7 @@ trait TypeComparers {
             isSubType(tp1, tp2)
         }
       case tv1 @ TypeVar(_, _) =>
+        println(s"type var at isWeakSubType tv1 = $tv1 - tp2 = $tp2")
         tp2.deconst.dealias match {
           case TypeRef(_, sym2, _) if isNumericValueClass(sym2) =>
             tv1.registerBound(tp2, isLowerBound = false, isNumericBound = true)
@@ -589,6 +624,7 @@ trait TypeComparers {
       case _ =>
         isSubType(tp1, tp2)
     }
+  }
 
   def isNumericSubType(tp1: Type, tp2: Type) = (
     isNumericSubClass(primitiveBaseClass(tp1.dealiasWiden), primitiveBaseClass(tp2.dealias))

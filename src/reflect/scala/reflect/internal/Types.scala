@@ -2815,6 +2815,7 @@ trait Types
       val tvars = quantifiedFresh map (tparam => TypeVar(tparam))
       val underlying1 = underlying.instantiateTypeParams(quantified, tvars) // fuse subst quantified -> quantifiedFresh -> tvars
       op(underlying1) && {
+        println(s"going to solve for ${this.safeToString}")
         solve(tvars, quantifiedFresh, quantifiedFresh map (_ => Invariant), upper = false, depth) &&
         isWithinBounds(NoPrefix, NoSymbol, quantifiedFresh, tvars map (_.inst))
       }
@@ -2887,11 +2888,11 @@ trait Types
     @inline final def trace[T](action: String, msg: => String)(value: T): T = {
       // Uncomment the following for a compiler that has some diagnostics about type inference
       // I doubt this is ever useful in the wild, so a recompile will be needed
-//    val s = msg match {
-//      case ""   => ""
-//      case str  => "( " + str + " )"
-//    }
-//    Console.err.println("[%10s] %-25s%s".format(action, value, s))
+    val s = msg match {
+      case ""   => ""
+      case str  => "( " + str + " )"
+    }
+    Console.err.println("[%10s] %-25s%s".format(action, value, s))
       value
     }
 
@@ -3073,7 +3074,9 @@ trait Types
     // <region name="constraint mutators + undoLog">
     // invariant: before mutating constr, save old state in undoLog
     // (undoLog is used to reset constraints to avoid piling up unrelated ones)
-    def setInst(tp: Type): this.type =
+    def setInst(tp: Type): this.type = {
+      println(s"setInst called on $this with $tp")
+
       if (tp ne this) {
         undoLog record this
         constr.inst = TypeVar.trace("setInst", s"In $originLocation, $originName=$tp")(
@@ -3084,23 +3087,26 @@ trait Types
         log(s"TypeVar cycle: called setInst passing $this to itself.")
         this
       }
+    }
 
     def addLoBound(tp: Type, isNumericBound: Boolean = false) {
       assert(tp != this, tp) // implies there is a cycle somewhere (?)
-      //println("addLoBound: "+(safeToString, debugString(tp))) //DEBUG
+      println("addLoBound: "+(safeToString, debugString(tp))) //DEBUG
       if (!sharesConstraints(tp)) {
         undoLog record this
         constr.addLoBound(tp, isNumericBound)
       }
+//      println("constr: "+constr) //DEBUG
     }
 
     def addHiBound(tp: Type, isNumericBound: Boolean = false) {
       // assert(tp != this)
-      //println("addHiBound: "+(safeToString, debugString(tp))) //DEBUG
+      println("addHiBound: "+(safeToString, debugString(tp))) //DEBUG
       if (!sharesConstraints(tp)) {
         undoLog record this
         constr.addHiBound(tp, isNumericBound)
       }
+//      println("constr: "+constr) //DEBUG
     }
     // </region>
 
@@ -3136,7 +3142,7 @@ trait Types
      *  If isNumericBound is true, the subtype check is performed with weak_<:< instead of <:<.
      */
     def registerBound(tp: Type, isLowerBound: Boolean, isNumericBound: Boolean = false): Boolean = {
-      // println("regBound: "+(safeToString, debugString(tp), isLowerBound)) //@MDEBUG
+      println("regBound: "+(safeToString, debugString(tp), isLowerBound)) //@MDEBUG
       if (isLowerBound)
         assert(tp != this)
 
@@ -3168,6 +3174,7 @@ trait Types
        *  }}}
        */
       def unifySimple = {
+        println(s"trying to unify ${this.safeToString} simple case")
         val sym = tp.typeSymbol
         if (sym == NothingClass || sym == AnyClass) { // kind-polymorphic
           // scala/bug#7126 if we register some type alias `T=Any`, we can later end
@@ -3230,7 +3237,10 @@ trait Types
         }
         // The type with which we can successfully unify can be hidden
         // behind singleton types and type aliases.
-        tpe.dealiasWidenChain exists unifySpecific
+        val other = tpe.dealiasWidenChain
+        println(s"trying to unify ${this.safeToString} with ${other.map(_.safeToString)}")
+        other exists unifySpecific
+        //tpe.dealiasWidenChain exists unifySpecific
       }
 
       // There's a <: test taking place right now, where tp is a concrete type and this is a typevar
@@ -4229,10 +4239,98 @@ trait Types
   }
 
   def isSubArgs(tps1: List[Type], tps2: List[Type], tparams: List[Symbol], depth: Depth): Boolean = {
-    def isSubArg(t1: Type, t2: Type, variance: Variance) = (
+    def stdPatternMatch[A](f: String => A)(t: Type) = t match {
+      case ErrorType =>
+        f("error type")
+      // internal: error
+      case WildcardType =>
+        f("wildcard type")
+      // internal: unknown
+      case BoundedWildcardType(bounds) =>
+        f("bounded wildcard type")
+      // internal: unknown
+      case NoType =>
+        f("no type")
+      case NoPrefix =>
+        f("no prefix")
+      case ThisType(sym) =>
+        f("this type")
+      // sym.this.type
+      case SuperType(thistpe, supertpe) =>
+        f("super type")
+      // super references
+      case SingleType(pre, sym) =>
+        f("single type")
+      // pre.sym.type
+      case ConstantType(value) =>
+        f("constant type")
+      // Int(2)
+      case TypeRef(pre, sym, args) =>
+        f("type ref")
+      // pre.sym[targs]
+      // Outer.this.C would be represented as TypeRef(ThisType(Outer), C, List())
+      case RefinedType(parents, defs) =>
+        f("refined type")
+      // parent1 with ... with parentn { defs }
+      case ExistentialType(tparams, result) =>
+        f("existential type")
+      // result forSome { tparams }
+      case AnnotatedType(annots, tp) =>
+        f("annotated type")
+      // tp @annots
+
+      // the following are non-value types; you cannot write them down in Scala source.
+
+      case TypeBounds(lo, hi) =>
+        f("type bounds")
+      // >: lo <: hi
+      case ClassInfoType(parents, defs, clazz) =>
+        f("class info type")
+      // same as RefinedType except as body of class
+      case MethodType(paramtypes, result) =>
+        f("method type")
+      // (paramtypes)result
+      // For instance def m(): T is represented as MethodType(List(), T)
+      case NullaryMethodType(result) => // eliminated by uncurry
+        f("nullary method type")
+      // an eval-by-name type
+      // For instance def m: T is represented as NullaryMethodType(T)
+      case PolyType(tparams, result) =>
+        f("poly type")
+      // [tparams]result where result is a (Nullary)MethodType or ClassInfoType
+
+      // The remaining types are not used after phase `typer`.
+      case OverloadedType(pre, alts) =>
+        f("overloaded type")
+      // all alternatives of an overloaded ident
+      case AntiPolyType(pre, targs) =>
+        f("anti poly type")
+      // rarely used, disappears when combined with a PolyType
+      case TypeVar(inst, constr) =>
+        f("type var")
+      // a type variable
+      // Replace occurrences of type parameters with type vars, where
+      // inst is the instantiation and constr is a list of bounds.
+      case ErasedValueType(clazz, underlying) =>
+        f("erased value type")
+      // only used during erasure of derived value classes.
+    }
+    def isSubArg(t1: Type, t2: Type, variance: Variance) = {
+      println(s"isSubArg(t1: Type = ${t1.safeToString}, t2: Type = ${t2.safeToString}, variance: Variance = $variance)")
+      println(s"t1.bounds = ${t1.bounds} - t2.bounds = ${t2.bounds}")
+
+      println(stdPatternMatch("t1 is " + _)(t1))
+      println(stdPatternMatch("t2 is " + _)(t2))
+
+      t1 match {
+        case tr1: TypeRef => ()
+        case _ => ()
+      }
+
+      (
          (variance.isCovariant || isSubType(t2, t1, depth))     // The order of these two checks can be material for performance (scala/bug#8478)
       && (variance.isContravariant || isSubType(t1, t2, depth))
-    )
+    )}
 
     corresponds3(tps1, tps2, mapList(tparams)(_.variance))(isSubArg)
   }
@@ -4499,10 +4597,16 @@ trait Types
           tparams ++= qs
           stripType(underlying)
         case tv@TypeVar(_, constr) =>
+          println(s"Here ${tv.typeSymbol} ${constr}")
           if (tv.instValid) stripType(constr.inst)
           else if (tv.untouchable) stripped += tv
           else abort("trying to do lub/glb of typevar " + tv)
         case tp => stripped += tp
+      }
+      try {
+        ts foreach stripType
+      } catch {
+        case e => e.printStackTrace(); throw e
       }
       ts foreach stripType
       (stripped.toList, tparams.toList)
