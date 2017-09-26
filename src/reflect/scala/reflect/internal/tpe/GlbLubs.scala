@@ -13,7 +13,7 @@ private[internal] trait GlbLubs {
   import definitions._
   import TypesStats._
 
-  private final val printLubs = System.getProperty("scalac.debug.lub") != null
+  private final val printLubs = true //System.getProperty("scalac.debug.lub") != null
   private final val strictInference = settings.strictInference
 
   /** In case anyone wants to turn off lub verification without reverting anything. */
@@ -295,6 +295,7 @@ private[internal] trait GlbLubs {
       case ts @ AnnotatedType(annots, tpe) :: rest =>
         annotationsLub(lub0(ts map (_.withoutAnnotations)), ts)
       case ts =>
+        println(s"lub running on $ts -- lubresults = $lubResults")
         lubResults get ((depth, ts)) match {
           case Some(lubType) =>
             lubType

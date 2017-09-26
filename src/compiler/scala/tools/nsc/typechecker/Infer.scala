@@ -304,7 +304,8 @@ trait Infer extends Checkable {
 
       val tp1 = normalize(tp)
 
-      (    (tp1 weak_<:< pt)
+      println(s"isCompatible tp1 = $tp1")
+      (    { val r = (tp1 weak_<:< pt) ; println(s"done with weak_<:< = $r"); r }
         || isCoercible(tp1, pt)
         || isCompatibleByName(tp, pt)
         || isCompatibleSam(tp, pt)
@@ -513,16 +514,19 @@ trait Infer extends Checkable {
     def methTypeArgs(fn: Tree, tparams: List[Symbol], formals: List[Type], restpe: Type,
                      argtpes: List[Type], pt: Type): AdjustedTypeArgs.Result = {
       val tvars = tparams map freshVar
+      println(s"tvars: $tvars")
       if (!sameLength(formals, argtpes))
         throw new NoInstance("parameter lists differ in length")
 
       val restpeInst = restpe.instantiateTypeParams(tparams, tvars)
+      println(s"restpeInst: $restpeInst")
 
       // first check if typevars can be fully defined from the expected type.
       // The return value isn't used so I'm making it obvious that this side
       // effects, because a function called "isXXX" is not the most obvious
       // side effecter.
       isConservativelyCompatible(restpeInst, pt)
+      println(s"passed conservatively compatibile test")
 
       // Return value unused with the following explanation:
       //
@@ -537,19 +541,24 @@ trait Infer extends Checkable {
 
       for (tvar <- tvars)
         if (!isFullyDefined(tvar)) tvar.constr.inst = NoType
+      println("came up to here!")
 
       // Then define remaining type variables from argument types.
       map2(argtpes, formals) { (argtpe, formal) =>
         val tp1 = argtpe.deconst.instantiateTypeParams(tparams, tvars)
+        println(s"came up to here!! tp1 = $tp1")
         val pt1 = formal.instantiateTypeParams(tparams, tvars)
+        println(s"came up to here!!! pt1 = $pt1")
 
         // Note that isCompatible side-effects: subtype checks involving typevars
         // are recorded in the typevar's bounds (see TypeConstraint)
         if (!isCompatible(tp1, pt1)) {
+          println("came up to here!!!!")
           throw new DeferredNoInstance(() =>
             "argument expression's type is not compatible with formal parameter type" + foundReqMsg(tp1, pt1))
         }
       }
+      println("came up to here!!!!!")
       val targs = solvedTypes(tvars, tparams, tparams map varianceInTypes(formals), upper = false, lubDepth(formals) max lubDepth(argtpes))
       // Can warn about inferring Any/AnyVal as long as they don't appear
       // explicitly anywhere amongst the formal, argument, result, or expected type.
@@ -980,8 +989,10 @@ trait Infer extends Checkable {
           val argtpes = tupleIfNecessary(formals, args map (x => elimAnonymousClass(x.tpe.deconst)))
           val restpe  = fn.tpe.resultType(argtpes)
 
+          println(s"methTypeArgs($fn, $undetparams, $formals, $restpe, $argtpes, $pt)")
           val AdjustedTypeArgs.AllArgsAndUndets(okparams, okargs, allargs, leftUndet) =
             methTypeArgs(fn, undetparams, formals, restpe, argtpes, pt)
+          println(s"methTypeArgs inferred AllArgsAndUndets($okparams, $okargs, $allargs, $leftUndet)")
 
           if (checkBounds(fn, NoPrefix, NoSymbol, undetparams, allargs, "inferred ")) {
             val treeSubst = new TreeTypeSubstituter(okparams, okargs)
